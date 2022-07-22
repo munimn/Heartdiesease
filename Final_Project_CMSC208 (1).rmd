@@ -1,0 +1,269 @@
+---
+title: "Final Project Report"
+author: "Nafis Munim, Chance Arnold"
+output: html_document
+---
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(tidyverse)
+library(corrplot)
+library(heatmaply)
+library(caret)
+library(ISLR)
+library(recipes)
+library(rpart)
+library(rpart.plot)
+library(MASS)
+library(ipred)
+library(e1071)
+library(ranger)
+
+happy <- read.csv("2019_happiness_dataset.csv")
+```
+
+The World Happiness Report is a landmark survey of the state of global happiness . The report we use was taken from Kaggle and is the data for the year 2019. The report gained global recognition as governments, organizations and civil society increasingly use happiness indicators to inform their policy-making decisions. Leading experts across fields – economics, psychology, survey analysis, national statistics, health, public policy and more – describe how measurements of well-being can be used effectively to assess the progress of nations. The reports review the state of happiness in the world today and show how the new science of happiness explains personal and national variations in happiness. The happiness scores and rankings use data from the Gallup World Poll. The scores are based on answers to the main life evaluation question asked in the poll.
+
+The data was taken from Kaggle(https://www.kaggle.com/datasets/unsdsn/world-happiness?select=2019.csv).
+
+The goal of our project is to investigate correlation between happiness indicators and happiness score. We try to implement and find out the best model (based on lowest RMSE) for this data set to predict the happiness score of a country. We are using score as our response variable and all other variables other than country, overall rank, and region as explanatory variables. To accomplis our main goal we don't need the region of the countries or the overall rank. We have thoroughly investigated the data set and created summary statistics and visualizations of different important explanatory variables. There are no missing values in our data set. We have also created a correlation plot to see if there is any severely correlated explanatory variables.
+
+```{r message=FALSE, warning=FALSE}
+set.seed(05292022) # set seed for cross validation
+summary(happy) # checking for missing data
+
+# visualization plots for selected variables
+ggplot(data = happy, aes(x = GDP.per.capita, y = Score)) + geom_point() + ggtitle("GDP per capita vs. Happiness Score") + geom_smooth(method = "lm")
+ggplot(data = happy, aes(x = Generosity, y = Score)) + geom_point() + ggtitle("Generosity score vs. Happiness Score") + geom_smooth(method = "lm")
+ggplot(data = happy, aes(x=Score)) + geom_histogram() + ggtitle("Histogram of Happiness Scores")
+happy1 <- happy %>% dplyr::select(-Country.or.region, -Overall.rank)       # dropping region and overall rank variables
+
+#correlation plot
+plot <- cor(happy1) 
+corrplot(plot)
+```
+
+```{r message=FALSE, warning=FALSE}
+# filtering for visualizing data for some major countries
+data <- happy %>% 
+  filter(Country.or.region %in% c("France", "Sweden", "Italy", "Spain", "England", "Portugal", "Greece", "Peru", "Chile", "Brazil", "Argentina", "Bolivia", "Venezuela", "Australia", "New Zealand", "Fiji", "China", "India", "Thailand", "Afghanistan", "Bangladesh", "United States of America", "Canada", "Burundi", "Angola", "Kenya", "Togo")) %>%
+  arrange(Country.or.region) %>%
+  mutate(Country = factor(Country.or.region, Country.or.region))
+
+# Matrix format
+mat <- data
+rownames(mat) <- mat[,2]
+mat <- mat %>% dplyr::select(-Country.or.region, -Overall.rank,-Country)
+
+# Heat map for the major countries including all variables
+
+p <- heatmaply(mat, 
+        dendrogram = "none",
+        xlab = "", ylab = "", 
+        main = "",
+        scale = "column",
+        margins = c(60,100,40,20),
+        grid_color = "white",
+        grid_width = 0.00001,
+        titleX = FALSE,
+        hide_colorbar = TRUE,
+        branches_lwd = 0.1,
+        label_names = c("Country", "Feature:", "Value"),
+        fontsize_row = 5, fontsize_col = 5,
+        labCol = colnames(mat),
+        labRow = rownames(mat),
+        heatmap_layers = theme(axis.line=element_blank())
+        )
+p
+```
+
+In this plot we can see the values of our explanatory variables for some major countries. We can hover over this interactive map and see the spceific values for each variable.
+
+```{r message=FALSE, warning=FALSE}
+summary(happy1) 
+
+sum(is.na(happy1))    # check missing values
+
+str(happy1) #checking for variable types
+
+train_index <- createDataPartition(happy1$Score, p = 0.8, list = FALSE)   # 80-20 split for creating training and test datasets
+
+train <- happy1[train_index, ]   # training set
+
+test <- happy1[-train_index, ]   # test set
+
+nearZeroVar(train, saveMetrics = TRUE)  # check which predictors are zv/nzv
+
+# create feature preprocessing blueprint
+
+blueprint <- recipe(Score ~ ., data = happy1) %>%
+  step_normalize(all_numeric_predictors()) # scaling and normalizing all numeric variables
+
+# preparing the blueprint
+prepare <- prep(blueprint, training = train) 
+baked_train <- bake(prepare, new_data = train)
+baked_test <- bake(prepare, new_data = test)
+```
+
+We have created training and test data sets by splitting the original data in an 80-20 split (80% is training data set). Considering that we only have 158 observations we decided to split the data into 80-20 as we will have more data for training set than a 70-30 split. We have initially investigated the data set for missing values and near zero/zero variace features. We don't have any missing values or any zv/nzv features. We don't have any catorgical features, as a result we don't need any label encoding. We have normalized all of our numerical variables to get an appropriate blueprint. After completing all of the steps needed for our blueprint we have created the blueprint and baked our test and training data set using the blueprint. 
+
+```{r message=FALSE, warning=FALSE}
+library(GGally)
+ggpairs(happy1, title="Correlogram ") # correlation plots to see possible relationship between the variables
+
+cv_specs <- trainControl(method = "repeatedcv", number = 5, repeats = 5) # setting cv specifications for all of the models
+
+# KNN regression
+k_grid <- expand.grid(k = seq(1, 20, by = 1)) # specifying the tuning parameters for knn regression
+
+# implementing cv to find optimal k value for the knn regression
+knn_fit <- train(blueprint,
+                  data = train, 
+                  method = "knn",
+                  trControl = cv_specs,
+                  tuneGrid = k_grid,
+                  metric = "RMSE")
+
+knn_fit
+ggplot(knn_fit)
+min(knn_fit$results$RMSE) # cv RMSE for knn regression
+knn_fit$results
+
+# MLR model
+# implementing cv to find RMSE for linear regression model
+lm_fit <- train(blueprint,
+                  data = train, 
+                  method = "lm",
+                  trControl = cv_specs,
+                  metric = "RMSE")
+
+lm_fit
+
+
+# Ridge regression model
+lambda_grid <- 10^seq(-3, 3, length = 100)   # grid of lambda values to search over
+
+ridge_cv <- train(blueprint,
+                  data = train,
+                  method = "glmnet",   # for ridge regression
+                  trControl = cv_specs,
+                  tuneGrid = expand.grid(alpha = 0, lambda = lambda_grid),  # alpha = 0 implements ridge regression
+                  metric = "RMSE")
+
+
+# results from the CV procedure
+
+ridge_cv$bestTune    # optimal lambda
+
+min(ridge_cv$results$RMSE)   # RMSE for optimal lambda
+
+# The LASSO model
+# implement CV
+
+lasso_cv <- train(blueprint,
+                  data = train,
+                  method = "glmnet",   # for lasso
+                  trControl = cv_specs,
+                  tuneGrid = expand.grid(alpha = 1, lambda = lambda_grid),  # alpha = 1 implements lasso
+                  metric = "RMSE")
+
+
+# results from the CV procedure
+
+lasso_cv$bestTune    # optimal lambda
+
+min(lasso_cv$results$RMSE)   # RMSE for optimal lambda
+
+# MARS model
+
+param_grid <- expand.grid(degree = 1:3, nprune = seq(1, 100, length.out = 10)) # setting parameters for mars model
+
+# implement CV
+mars_cv <- train(blueprint,
+                 data = train,
+                 method = "earth",
+                 trControl = cv_specs,
+                 tuneGrid = param_grid,
+                 metric = "RMSE")
+
+mars_cv$bestTune   # optimal tuning parameters
+
+min(mars_cv$results$RMSE)   # CV RMSE
+
+# Tree model
+#implement cv
+tree_cv <- train(blueprint,
+                 data = train,
+                 method = "rpart",
+                 trControl = cv_specs,
+                 tuneLength = 20,
+                 metric = "RMSE")
+
+tree_cv$bestTune   # optimal tuning parameter
+
+min(tree_cv$results$RMSE)   # CV RMSE
+
+# Bagging
+bag_fit <- bagging(Score ~ ., 
+                  data = baked_train,
+                  nbagg = 500,   # number of trees to grow (bootstrap replications)
+                  coob = TRUE,   # yes to computing OOB error estimate
+                  control = rpart.control(minsplit = 2, cp = 0, xval = 0))  # details of each tree
+                  
+bag_fit #results for bagging 
+
+# Random Forest model
+param_grid <- expand.grid(mtry = seq(1, 6, 1),    # sequence of 1 to number of predictors (6)
+                          splitrule = "variance",   
+                          min.node.size = 2)   # for each tree
+
+# implement cv
+rf_cv <- train(blueprint,
+               data = train,
+               method = "ranger",
+               trControl = cv_specs,
+               tuneGrid = param_grid,
+               metric = "RMSE")
+
+rf_cv$bestTune$mtry   # optimal tuning parameter
+
+min(rf_cv$results$RMSE)   # CV RMSE
+```
+
+Our response variable is a numerical variable so we chose to implement different regression models. We didn't choose GAM fit model and we haven't used any polynomial terms for any variables while doing the MLR. We didn't choose GAM fit because it was out of our scope to use cross validation for this method. We have checked the correlation plot and we have seen no polynomial trend in any of the variables. We have implemented our cv for KNN, MLR, Ridge, Lasso, Mars, single regression tree, and Random Forest. We have also created a bag fit model using nbag = 500. For our cv specs we have used 5 fold repeated 5 times. We have investigated the optimal parameters for each of the models and the RMSE for the optimal tuning parameters. The table below shows the results of our models. 
+
+
+
+Model         | CV RMSE               |      Optimal tuning parameter |
+:------------  | :-------------:        |  -----------:  |
+KNN  |      0.512  |  8  |
+MLR   |     0.510    |   N/A |
+RIDGE  | 0.502 |  Alpha = 0 Lambda = 0.15  | 
+LASSO | 0.512 | Alpha = 1 Lambda = 0.004  |
+MARS  |  0.514  | nprune = 12 |   
+Single Regression Tree  |  0.591  | cp = 0 |   
+Bagging  |  0.5025  | nbag = 500 |   
+Random Forest  |  0.486  | mtry = 2 | 
+
+
+From the table we can see that the optimal model was Random Forest with the lowest RMSE of 0.487 with optimal mtry=2. 
+
+```{r message=FALSE, warning=FALSE}
+# final model using rf
+rf_fit <- ranger(Score ~ .,
+                 data = baked_train,
+                 num.trees = 500,
+                 mtry = rf_cv$bestTune$mtry, # using best tuning parameter from cv rf
+                 splitrule = "variance",  
+                 min.node.size = 2, 
+                 importance = "impurity")
+
+# variable importance
+sort(rf_fit$variable.importance, decreasing = TRUE)
+
+preds_rf <- predict(rf_fit, data = baked_test, type = "response")  # predictions on test set
+
+sqrt(mean((preds_rf$predictions - baked_test$Score)^2))  # test set RMSE
+```
+
+Based on our cv results we chose to create a final model using the random forest with mtry = 2. We have created the optimal model on our training data and tried to investigate the importance of the variables. The most important variable was social support. We have also obtained predictions using the model on our test data set. The test RMSE or the test set error for the final model was 0.603. 
